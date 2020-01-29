@@ -166,6 +166,12 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		}
 	}
 
+	private _isExtensionPermitted(_extToCheck: IExtensionDescription): boolean {
+		//TODO: check against actual list of permitted publishers and packages
+		let allowedPublishers = ['vscode', 'ms-vscode'];
+		return allowedPublishers.indexOf(_extToCheck.publisher) !== -1;
+	}
+
 	private async _deltaExtensions(_toAdd: IExtension[], _toRemove: string[]): Promise<void> {
 		if (this._environmentService.configuration.remoteAuthority) {
 			return;
@@ -185,7 +191,11 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 				continue;
 			}
 
-			toAdd.push(extensionDescription);
+			if (this._isExtensionPermitted(extensionDescription)) {
+				toAdd.push(extensionDescription);
+			} else {
+				console.log('prohibiting loading an extension: ' + extensionDescription.identifier.value);
+			}
 		}
 
 		let toRemove: IExtensionDescription[] = [];
@@ -448,6 +458,14 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 
 		// remove disabled extensions
 		localExtensions = remove(localExtensions, extension => this._isDisabled(extension));
+
+		// capture the prohibited extensions just for sanity checks, remove this later
+		let prohibitedExtensions = localExtensions.filter(ext => !this._isExtensionPermitted(ext));
+		for (let m of prohibitedExtensions) {
+			console.log('prohibiting loading the extension ' + m.identifier.value + ' ver ' + m.version + ' -- prohibited publisher');
+		}
+
+		localExtensions = localExtensions.filter(ext => this._isExtensionPermitted(ext));
 
 		if (remoteAuthority) {
 			let resolvedAuthority: ResolverResult;
