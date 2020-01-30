@@ -39,6 +39,7 @@ import { IStaticExtensionsService } from 'vs/workbench/services/extensions/commo
 import { IElectronService } from 'vs/platform/electron/node/electron';
 import { IElectronEnvironmentService } from 'vs/workbench/services/electron/electron-browser/electronEnvironmentService';
 import { IRemoteExplorerService } from 'vs/workbench/services/remote/common/remoteExplorerService';
+import { readFileSync, existsSync } from 'fs';
 
 class DeltaExtensionsQueueItem {
 	constructor(
@@ -54,6 +55,10 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 	private readonly _extensionHostLogsLocation: URI;
 	private readonly _extensionScanner: CachedExtensionScanner;
 	private _deltaExtensionsQueue: DeltaExtensionsQueueItem[];
+
+	private _allowedPublishers: string[];
+	private _allowedPackages: string[];
+	private _prohibitedPackages: string[];
 
 	constructor(
 		@IInstantiationService instantiationService: IInstantiationService,
@@ -98,6 +103,10 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		this._extensionHostLogsLocation = URI.file(path.join(this._environmentService.logsPath, `exthost${this._electronEnvironmentService.windowId}`));
 		this._extensionScanner = instantiationService.createInstance(CachedExtensionScanner);
 		this._deltaExtensionsQueue = [];
+
+		this._allowedPublishers = this._loadExtensionManagementFile('.vscode_extension_publisher_allow');
+		this._allowedPackages = this._loadExtensionManagementFile('.vscode_extension_package_allow');
+		this._prohibitedPackages = this._loadExtensionManagementFile('.vscode_extension_package_deny');
 
 		this._register(this._extensionEnablementService.onEnablementChanged((extensions) => {
 			let toAdd: IExtension[] = [];
@@ -144,6 +153,13 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		});
 	}
 
+	private _loadExtensionManagementFile(filename: string): string[] {
+		const filepath = path.join(this._environmentService.userHome, filename);
+		if (existsSync(filepath)) {
+			return readFileSync(filepath).toString().split('\n');
+		}
+		return [];
+	}
 
 	//#region deltaExtensions
 
@@ -167,9 +183,9 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 	}
 
 	private _isExtensionPermitted(_extToCheck: IExtensionDescription): boolean {
-		//TODO: check against actual list of permitted publishers and packages
-		let allowedPublishers = ['vscode', 'ms-vscode'];
-		return allowedPublishers.indexOf(_extToCheck.publisher) !== -1;
+		return (this._allowedPublishers.indexOf(_extToCheck.publisher) !== -1 ||
+			this._allowedPackages.indexOf(_extToCheck.identifier.value) !== -1) &&
+			this._prohibitedPackages.indexOf(_extToCheck.identifier.value + _extToCheck.version) === -1;
 	}
 
 	private async _deltaExtensions(_toAdd: IExtension[], _toRemove: string[]): Promise<void> {
