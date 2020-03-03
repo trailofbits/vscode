@@ -15,6 +15,8 @@ import { EnvironmentService } from 'vs/platform/environment/node/environmentServ
 import { ExtensionManagementChannel } from 'vs/platform/extensionManagement/common/extensionManagementIpc';
 import { IExtensionManagementService, IExtensionGalleryService } from 'vs/platform/extensionManagement/common/extensionManagement';
 import { ExtensionManagementService } from 'vs/platform/extensionManagement/node/extensionManagementService';
+import { IExtensionBlocklistService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
+import { ExtensionBlocklistService } from 'vs/workbench/services/extensionManagement/common/extensionBlocklistService';
 import { ExtensionGalleryService } from 'vs/platform/extensionManagement/common/extensionGalleryService';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ConfigurationService } from 'vs/platform/configuration/node/configurationService';
@@ -176,6 +178,7 @@ async function main(server: Server, initData: ISharedProcessInitData, configurat
 		}
 		server.registerChannel('telemetryAppender', new TelemetryAppenderChannel(appInsightsAppender));
 
+		services.set(IExtensionBlocklistService, new SyncDescriptor(ExtensionBlocklistService));
 		services.set(IExtensionManagementService, new SyncDescriptor(ExtensionManagementService));
 		services.set(IExtensionGalleryService, new SyncDescriptor(ExtensionGalleryService));
 		services.set(ILocalizationsService, new SyncDescriptor(LocalizationsService));

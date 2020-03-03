@@ -45,7 +45,7 @@ import { CancellationToken } from 'vs/base/common/cancellation';
 import { getPathFromAmdModule } from 'vs/base/common/amd';
 import { getManifest } from 'vs/platform/extensionManagement/node/extensionManagementUtil';
 import { IExtensionManifest, ExtensionType } from 'vs/platform/extensions/common/extensions';
-import { readFileSync, existsSync } from 'fs';
+import { IExtensionBlocklistService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
 
 const ERROR_SCANNING_SYS_EXTENSIONS = 'scanningSystem';
 const ERROR_SCANNING_USER_EXTENSIONS = 'scanningUser';
@@ -127,16 +127,13 @@ export class ExtensionManagementService extends Disposable implements IExtension
 	private _onDidUninstallExtension = this._register(new Emitter<DidUninstallExtensionEvent>());
 	onDidUninstallExtension: Event<DidUninstallExtensionEvent> = this._onDidUninstallExtension.event;
 
-	private _allowedPublishers: string[];
-	private _allowedPackages: string[];
-	private _prohibitedPackages: string[];
-
 	constructor(
 		@IEnvironmentService private readonly environmentService: IEnvironmentService,
 		@IExtensionGalleryService private readonly galleryService: IExtensionGalleryService,
 		@ILogService private readonly logService: ILogService,
 		@optional(IDownloadService) private downloadService: IDownloadService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
+		@IExtensionBlocklistService private readonly blocklistService: IExtensionBlocklistService,
 	) {
 		super();
 		this.systemExtensionsPath = environmentService.builtinExtensionsPath;
@@ -146,23 +143,12 @@ export class ExtensionManagementService extends Disposable implements IExtension
 		this.manifestCache = this._register(new ExtensionsManifestCache(environmentService, this));
 		this.extensionLifecycle = this._register(new ExtensionsLifecycle(environmentService, this.logService));
 
-		this._allowedPublishers = this._loadExtensionManagementFile(path.join(environmentService.userHome, '.vscode_extension_publisher_allow'));
-		this._allowedPackages = this._loadExtensionManagementFile(path.join(environmentService.userHome, '.vscode_extension_package_allow'));
-		this._prohibitedPackages = this._loadExtensionManagementFile(path.join(environmentService.userHome, '.vscode_extension_package_deny'));
-
 		this._register(toDisposable(() => {
 			this.installingExtensions.forEach(promise => promise.cancel());
 			this.uninstallingExtensions.forEach(promise => promise.cancel());
 			this.installingExtensions.clear();
 			this.uninstallingExtensions.clear();
 		}));
-	}
-
-	private _loadExtensionManagementFile(filepath: string): string[] {
-		if (existsSync(filepath)) {
-			return readFileSync(filepath).toString().split('\n');
-		}
-		return [];
 	}
 
 	zip(extension: ILocalExtension): Promise<URI> {
@@ -222,7 +208,7 @@ export class ExtensionManagementService extends Disposable implements IExtension
 						if (manifest.engines && manifest.engines.vscode && !isEngineValid(manifest.engines.vscode, product.version)) {
 							return Promise.reject(new Error(nls.localize('incompatible', "Unable to install extension '{0}' as it is not compatible with VS Code '{1}'.", identifier.id, product.version)));
 						}
-						if (!this._isExtensionPermitted(manifest.publisher, identifier.id, manifest.version)) {
+						if (!this.blocklistService.isPermitted(manifest)) {
 							return Promise.reject(new Error(nls.localize('prohibited', "Unable to install extension '{0}' as it is prohibited by local policy.", identifier.id)));
 						}
 						const identifierWithVersion = new ExtensionIdentifierWithVersion(identifier, manifest.version);
@@ -377,18 +363,12 @@ export class ExtensionManagementService extends Disposable implements IExtension
 		return cancellablePromise;
 	}
 
-	private _isExtensionPermitted(publisher: string, identifier: string, version: string): boolean {
-		return (this._allowedPublishers.indexOf(publisher) !== -1 ||
-			this._allowedPackages.indexOf(identifier) !== -1) &&
-			this._prohibitedPackages.indexOf(identifier + version) === -1;
-	}
-
 	private async checkAndGetCompatibleVersion(extension: IGalleryExtension): Promise<IGalleryExtension> {
 		if (await this.isMalicious(extension)) {
 			return Promise.reject(new ExtensionManagementError(nls.localize('malicious extension', "Can't install extension since it was reported to be problematic."), INSTALL_ERROR_MALICIOUS));
 		}
 
-		if (!this._isExtensionPermitted(extension.publisher, extension.identifier.id, extension.version)) {
+		if (!this.blocklistService.isPermitted(extension)) {
 			return Promise.reject(new ExtensionManagementError(nls.localize('prohibited extension', "Can't install extension since it was blocked by local policy."), INSTALL_ERROR_MALICIOUS));
 		}
 

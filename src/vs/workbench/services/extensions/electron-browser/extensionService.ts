@@ -14,7 +14,7 @@ import { runWhenIdle } from 'vs/base/common/async';
 import { URI } from 'vs/base/common/uri';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 import { IExtensionManagementService } from 'vs/platform/extensionManagement/common/extensionManagement';
-import { IExtensionEnablementService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
+import { IExtensionBlocklistService, IExtensionEnablementService } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IInitDataProvider, RemoteExtensionHostClient } from 'vs/workbench/services/extensions/common/remoteExtensionHostClient';
 import { IRemoteAgentService } from 'vs/workbench/services/remote/common/remoteAgentService';
@@ -39,7 +39,6 @@ import { IStaticExtensionsService } from 'vs/workbench/services/extensions/commo
 import { IElectronService } from 'vs/platform/electron/node/electron';
 import { IElectronEnvironmentService } from 'vs/workbench/services/electron/electron-browser/electronEnvironmentService';
 import { IRemoteExplorerService } from 'vs/workbench/services/remote/common/remoteExplorerService';
-import { readFileSync, existsSync } from 'fs';
 
 class DeltaExtensionsQueueItem {
 	constructor(
@@ -56,10 +55,6 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 	private readonly _extensionScanner: CachedExtensionScanner;
 	private _deltaExtensionsQueue: DeltaExtensionsQueueItem[];
 
-	private _allowedPublishers: string[];
-	private _allowedPackages: string[];
-	private _prohibitedPackages: string[];
-
 	constructor(
 		@IInstantiationService instantiationService: IInstantiationService,
 		@INotificationService notificationService: INotificationService,
@@ -69,6 +64,7 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		@IFileService fileService: IFileService,
 		@IProductService productService: IProductService,
 		@IExtensionManagementService private readonly _extensionManagementService: IExtensionManagementService,
+		@IExtensionBlocklistService private readonly _blocklistService: IExtensionBlocklistService,
 		@IRemoteAgentService private readonly _remoteAgentService: IRemoteAgentService,
 		@IRemoteAuthorityResolverService private readonly _remoteAuthorityResolverService: IRemoteAuthorityResolverService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
@@ -103,10 +99,6 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		this._extensionHostLogsLocation = URI.file(path.join(this._environmentService.logsPath, `exthost${this._electronEnvironmentService.windowId}`));
 		this._extensionScanner = instantiationService.createInstance(CachedExtensionScanner);
 		this._deltaExtensionsQueue = [];
-
-		this._allowedPublishers = this._loadExtensionManagementFile('.vscode_extension_publisher_allow');
-		this._allowedPackages = this._loadExtensionManagementFile('.vscode_extension_package_allow');
-		this._prohibitedPackages = this._loadExtensionManagementFile('.vscode_extension_package_deny');
 
 		this._register(this._extensionEnablementService.onEnablementChanged((extensions) => {
 			let toAdd: IExtension[] = [];
@@ -153,14 +145,6 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		});
 	}
 
-	private _loadExtensionManagementFile(filename: string): string[] {
-		const filepath = path.join(this._environmentService.userHome, filename);
-		if (existsSync(filepath)) {
-			return readFileSync(filepath).toString().split('\n');
-		}
-		return [];
-	}
-
 	//#region deltaExtensions
 
 	private _inHandleDeltaExtensions = false;
@@ -182,10 +166,8 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		}
 	}
 
-	private _isExtensionPermitted(_extToCheck: IExtensionDescription): boolean {
-		return (this._allowedPublishers.indexOf(_extToCheck.publisher) !== -1 ||
-			this._allowedPackages.indexOf(_extToCheck.identifier.value) !== -1) &&
-			this._prohibitedPackages.indexOf(_extToCheck.identifier.value + _extToCheck.version) === -1;
+	private isPermitted(extension: { publisher: string; name: string; version: string }): boolean {
+		return this._blocklistService.isPermitted(extension);
 	}
 
 	private async _deltaExtensions(_toAdd: IExtension[], _toRemove: string[]): Promise<void> {
@@ -207,7 +189,7 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 				continue;
 			}
 
-			if (this._isExtensionPermitted(extensionDescription)) {
+			if (this.isPermitted(extensionDescription)) {
 				toAdd.push(extensionDescription);
 			} else {
 				console.log('prohibiting loading an extension: ' + extensionDescription.identifier.value);
@@ -476,12 +458,12 @@ export class ExtensionService extends AbstractExtensionService implements IExten
 		localExtensions = remove(localExtensions, extension => this._isDisabled(extension));
 
 		// capture the prohibited extensions just for sanity checks, remove this later
-		let prohibitedExtensions = localExtensions.filter(ext => !this._isExtensionPermitted(ext));
+		let prohibitedExtensions = localExtensions.filter(ext => !this.isPermitted(ext));
 		for (let m of prohibitedExtensions) {
 			console.log('prohibiting loading the extension ' + m.identifier.value + ' ver ' + m.version + ' -- prohibited publisher');
 		}
 
-		localExtensions = localExtensions.filter(ext => this._isExtensionPermitted(ext));
+		localExtensions = localExtensions.filter(ext => this.isPermitted(ext));
 
 		if (remoteAuthority) {
 			let resolvedAuthority: ResolverResult;
